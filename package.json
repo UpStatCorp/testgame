@@ -1,0 +1,20 @@
+{
+  "name": "echoes-of-the-northern-woods",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "First-person survival/fantasy 3D adventure MVP built with Three.js",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview --host",
+    "start": "vite --host --open"
+  },
+  "dependencies": {
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.1",
+    "vite": "^8.3.1"
+  }
+}
