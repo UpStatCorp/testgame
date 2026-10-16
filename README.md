@@ -21,6 +21,25 @@ npm run dev        # откройте http://localhost:5173
 - `?quality=low` — облегчённая графика (меньше травы/деревьев, без bloom) для слабых GPU;
 - `?autostart` — пропустить стартовый экран (используется автотестами).
 
+## Десктопная версия (Windows / Linux / macOS)
+
+Игра упакована в настольное приложение на Electron — обычное окно, без браузера
+(Ctrl и другие клавиши больше не перехватываются браузером, **F11** — полный экран).
+
+- **Готовая сборка для Windows:** скачайте `NorthernWoods-Windows-1.0.0.zip` со страницы
+  Releases репозитория, распакуйте и запустите `Echoes of the Northern Woods.exe`.
+- Установщик `.exe`, портативный `.exe`, Linux AppImage и macOS `.dmg` собирает GitHub Actions
+  (workflow *Desktop builds*, вкладка Actions → артефакты).
+- Собрать самому:
+
+```bash
+npm install
+npm run desktop      # запустить как приложение
+npm run dist:win     # Windows: установщик + portable .exe в папке release/
+npm run dist:linux   # Linux AppImage
+npm run dist:mac     # macOS .dmg (на Mac)
+```
+
 ## Управление
 
 | Клавиша | Действие |

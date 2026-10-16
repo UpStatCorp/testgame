@@ -8,13 +8,77 @@
     "dev": "vite --host",
     "build": "vite build",
     "preview": "vite preview --host",
-    "start": "vite --host --open"
+    "start": "vite --host --open",
+    "desktop": "vite build && electron .",
+    "dist:win": "vite build && electron-builder --win --x64",
+    "dist:linux": "vite build && electron-builder --linux",
+    "dist:mac": "vite build && electron-builder --mac"
   },
-  "dependencies": {
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^44.8.0",
+    "electron-builder": "^26.15.3",
+    "playwright": "^1.56.1",
+    "vite": "^8.3.1",
     "three": "^0.186.1"
   },
-  "devDependencies": {
-    "playwright": "^1.56.1",
-    "vite": "^8.3.1"
+  "main": "electron/main.cjs",
+  "author": "Echoes of the Northern Woods",
+  "build": {
+    "appId": "com.northernwoods.echoes",
+    "productName": "Echoes of the Northern Woods",
+    "copyright": "© 2026",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Эхо Северных Лесов",
+      "artifactName": "NorthernWoods-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "NorthernWoods-Portable-${version}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Game",
+      "icon": "build/icon.png"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.games",
+      "icon": "build/icon.png"
+    }
   }
 }

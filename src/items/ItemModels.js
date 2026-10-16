@@ -18,15 +18,16 @@ export function setItemEnvMap(tex) {
 
 function mat(name, params) {
   if (!sharedMaterials[name]) {
-    sharedMaterials[name] = new THREE.MeshStandardMaterial(params);
+    // Room-style env maps are very bright; keep metal reflections subtle so bloom doesn't blow them out
+    sharedMaterials[name] = new THREE.MeshStandardMaterial({ envMapIntensity: 0.12, ...params });
     if (envMap && params.metalness > 0.3) sharedMaterials[name].envMap = envMap;
   }
   return sharedMaterials[name];
 }
 
 const M = {
-  steel: () => mat('steel', { color: '#c9d2da', metalness: 0.9, roughness: 0.28, envMapIntensity: 1.0 }),
-  darkSteel: () => mat('darkSteel', { color: '#8d97a3', metalness: 0.9, roughness: 0.35, envMapIntensity: 1.0 }),
+  steel: () => mat('steel', { color: '#b8c2cc', metalness: 0.85, roughness: 0.32, envMapIntensity: 0.15 }),
+  darkSteel: () => mat('darkSteel', { color: '#8d97a3', metalness: 0.85, roughness: 0.38, envMapIntensity: 0.15 }),
   fuller: () => mat('fuller', { color: '#5a646e', metalness: 0.85, roughness: 0.4 }),
   gold: () => mat('gold', { color: '#d4a84a', metalness: 0.95, roughness: 0.3 }),
   leather: () => mat('leather', { color: '#4a2e1c', roughness: 0.85 }),
