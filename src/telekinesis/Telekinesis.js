@@ -229,8 +229,8 @@ export class Telekinesis {
       // Target point in front of the camera; spring the body toward it
       const cam = game.camera.position;
       this.target.copy(cam).addScaledVector(game.cameraRig.forward, this.holdDistance + body.radius);
-      // keep it above the ground
-      const gh = game.terrain.getHeight(this.target.x, this.target.z) + body.radius + 0.1;
+      // keep it floating clearly above the ground
+      const gh = game.terrain.getHeight(this.target.x, this.target.z) + body.radius + 0.9;
       if (this.target.y < gh) this.target.y = gh;
       const toT = this._v.subVectors(this.target, body.position);
       // Velocity servo toward the target point (heavier objects respond more sluggishly)

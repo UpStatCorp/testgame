@@ -77,7 +77,7 @@ kbd {
 .start-sub { font-style: italic; color: var(--text-dim); font-size: 20px; margin: 6px 0 30px; text-align: center; }
 .controls-grid { display: grid; grid-template-columns: auto auto; gap: 6px 18px; margin: 18px 0 24px; font-size: 15px; color: var(--text-dim); }
 .controls-grid span:nth-child(odd) { text-align: right; }
-.menu-box { padding: 10px 34px 26px; min-width: 360px; display: flex; flex-direction: column; gap: 10px; align-items: stretch; }
+.menu-box { padding: 10px 34px 26px; min-width: 360px; max-height: 92vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; align-items: stretch; }
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; font-size: 15px; }
 .setting-row input[type=range] { width: 160px; accent-color: var(--gold); }
 .death-title { font-family: var(--font-title); font-size: 64px; color: #d8483a; text-shadow: 0 0 30px rgba(200,40,30,0.6); letter-spacing: 0.1em; }

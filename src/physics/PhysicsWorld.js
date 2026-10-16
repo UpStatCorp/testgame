@@ -239,10 +239,14 @@ export class PhysicsWorld {
         v.addScaledVector(n, -(1 + b.restitution) * vn);
         if (Math.abs(vn) < 1.5) v.addScaledVector(n, -v.dot(n)); // kill tiny bounces
       }
-      // Slope-driven rolling + friction
+      // Kinetic friction, plus static friction so props rest on gentle slopes instead of creeping
       const f = Math.exp(-b.friction * dt);
       v.x *= f;
       v.z *= f;
+      if (n.y > 0.8 && !b.held && v.x * v.x + v.z * v.z < (b.rollFactor < 0.6 ? 1.0 : 0.25)) {
+        v.x = 0;
+        v.z = 0;
+      }
       b.onGround = true;
     }
 

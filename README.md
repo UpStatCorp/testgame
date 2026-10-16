@@ -95,5 +95,6 @@ tests/         smoke.mjs, mechanics.mjs — headless-проверки через
 
 ```bash
 npm run build && npx vite preview --port 4173 &
-node tests/mechanics.mjs      # 30+ проверок механик + скриншоты в test-output/
+node tests/mechanics.mjs      # 34 проверки механик (~1.5 мин, режим ?lite)
+node tests/screens.mjs high  # скриншоты мира в test-output/
 ```

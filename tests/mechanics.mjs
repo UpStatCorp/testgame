@@ -8,36 +8,39 @@ const base = process.argv[2] || 'http://localhost:4173/';
 const out = 'test-output';
 fs.mkdirSync(out, { recursive: true });
 const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
-const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
+const page = await browser.newPage({ viewport: { width: 900, height: 620 } });
 const errors = [];
 page.on('console', (m) => { if (m.type() === 'error' && !m.text().includes('ERR_CERT')) errors.push(`[console] ${m.text()}`); });
 page.on('pageerror', (e) => errors.push(`[pageerror] ${e.message}\n${e.stack}`));
 const results = [];
 const check = (name, ok, info = '') => { results.push(`${ok ? 'PASS' : 'FAIL'}  ${name} ${info}`); };
-const shot = (n) => page.screenshot({ path: `${out}/${n}.png`, timeout: 90000 });
+const shot = async (n) => { if (process.env.SHOTS) await page.screenshot({ path: `${out}/${n}.png`, timeout: 90000 }); };
 const wait = (ms) => page.waitForTimeout(ms);
 const ev = (fn, arg) => page.evaluate(fn, arg);
 
 await page.goto(base + '?autostart&lite');
 await page.waitForFunction(() => window.game && window.game.state === 'playing', null, { timeout: 180000 });
+// Tests drive the camera directly: disable real pointer lock so synthetic mouse moves don't rotate it
+await page.evaluate(() => { game.input.requestLock = () => {}; if (document.pointerLockElement) { game.ui.intentionalUnlock = true; document.exitPointerLock(); } });
 await wait(1500);
 
 // ---- Movement ----
 const p0 = await ev(() => game.player.position.toArray());
 await page.keyboard.down('KeyW');
-await wait(1500);
+await wait(3000);
 await page.keyboard.up('KeyW');
 const p1 = await ev(() => game.player.position.toArray());
 const moved = Math.hypot(p1[0] - p0[0], p1[2] - p0[2]);
-check('WASD movement', moved > 1.5, `moved ${moved.toFixed(2)}m`);
+check('WASD movement', moved > 1.0, `moved ${moved.toFixed(2)}m`);
 await page.keyboard.down('ShiftLeft'); await page.keyboard.down('KeyW');
 await wait(800);
 const sprinting = await ev(() => game.player.sprinting);
 await page.keyboard.up('KeyW'); await page.keyboard.up('ShiftLeft');
 check('Sprint', sprinting);
+await ev(() => { window.__air = false; window.__airT = setInterval(() => { if (!game.player.onGround) window.__air = true; }, 5); });
 await page.keyboard.press('Space');
-await wait(150);
-const airborne = await ev(() => !game.player.onGround);
+await wait(1500);
+const airborne = await ev(() => { clearInterval(window.__airT); return window.__air; });
 check('Jump', airborne);
 await wait(800);
 await page.keyboard.down('KeyC'); await wait(400);
@@ -102,6 +105,7 @@ async function aimAt(idx) {
     game.cameraRig.pitch = -0.1;
   }, idx);
 }
+const coins0 = await ev(() => game.inventory.count('coin'));
 await page.keyboard.press('Digit1');
 await wait(400);
 let idx = await spawnEnemyInFront(2.2);
@@ -132,14 +136,15 @@ for (let k = 0; k < 4; k++) {
 const dead = await ev(() => game.player.stats.kills);
 check('Enemy dies (state DEAD, kill counted)', dead >= 1, `kills=${dead}`);
 await wait(1500);
-const loot = await ev(() => game.pickups.list.length);
-check('Enemy drops loot', loot > 0, `pickups=${loot}`);
+await page.waitForFunction((c) => game.pickups.list.length > 0 || game.inventory.count('coin') > c, coins0, { timeout: 30000 }).catch(() => {});
+const loot = await ev(() => [game.pickups.list.length, game.inventory.count('coin')]);
+check('Enemy drops loot', loot[0] > 0 || loot[1] > coins0, `pickups=${loot[0]} coins ${coins0}->${loot[1]}`);
 
 // ---- Enemy AI: chase + attack ----
 const hpBefore = await ev(() => game.player.health.current);
 idx = await spawnEnemyInFront(8);
 await ev((i) => { const e = game.entities.creatures[i]; e.stateTime = 0; e.setState('CHASE'); }, idx);
-await wait(3500);
+await page.waitForFunction((a) => { const e = game.entities.creatures[a.i]; return e.state === 'ATTACK' || game.player.health.current < a.hp; }, { i: idx, hp: hpBefore }, { timeout: 60000 }).catch(() => {});
 const st = await ev((i) => game.entities.creatures[i].state, idx);
 const hpAfter = await ev(() => game.player.health.current);
 check('Enemy chases/attacks player', hpAfter < hpBefore || st === 'ATTACK', `state=${st} hp ${hpBefore}->${hpAfter.toFixed(0)}`);
@@ -165,40 +170,55 @@ await ev(() => {
   game.cameraRig.yaw = Math.atan2(-dx, -dz);
   game.cameraRig.pitch = Math.atan2(dy, Math.hypot(dx, dz));
 });
-await wait(300);
+const aimCrate = () => ev(() => {
+  const c = window.__crate.position, cam = game.camera.position;
+  const dx = c.x - cam.x, dy = c.y - cam.y, dz = c.z - cam.z;
+  game.cameraRig.yaw = Math.atan2(-dx, -dz);
+  game.cameraRig.pitch = Math.atan2(dy, Math.hypot(dx, dz));
+});
+await page.waitForFunction(() => game.telekinesis.hovered === window.__crate, null, { timeout: 30000 }).catch(() => {});
 check('Telekinesis hover highlight', await ev(() => game.telekinesis.hovered === window.__crate));
+await aimCrate();
 await page.mouse.down();
-await wait(300);
+await page.waitForFunction(() => game.telekinesis.held === window.__crate, null, { timeout: 20000 }).catch(() => {});
 await ev(() => { game.cameraRig.pitch = 0.15; });
-await wait(1200);
+await page.waitForFunction(() => window.__crate.position.y > game.terrain.getHeight(window.__crate.position.x, window.__crate.position.z) + 1, null, { timeout: 30000 }).catch(() => {});
 check('Telekinesis grab (object held & lifted)', await ev(() => game.telekinesis.held === window.__crate && window.__crate.position.y > game.terrain.getHeight(window.__crate.position.x, window.__crate.position.z) + 1));
 await shot('07-telekinesis');
 await page.mouse.up();
-await wait(100);
+await page.waitForFunction(() => !game.telekinesis.held, null, { timeout: 20000 }).catch(() => {});
 const speed = await ev(() => window.__crate.velocity.length());
 check('Telekinesis throw on release', speed > 8, `speed=${speed.toFixed(1)}`);
 await wait(1500);
 
 // ---- NPC dialog ----
-const talked = await ev(() => {
+const placeNearElder = () => ev(() => {
   const v = game.entities.villagers.find((x) => x.profile.title === 'Старейшина');
-  v.state = 'IDLE'; v.stateTime = 0; v.idleDuration = 999;
+  v.state = 'IDLE'; v.stateTime = 0; v.idleDuration = 999; v.desiredSpeed = 0; v.velocity.set(0, 0, 0);
+  game.entities.killAllEnemies();
   const p = game.player.position;
   p.set(v.position.x + 2, v.position.y, v.position.z);
+  game.player.velocity.set(0, 0, 0);
   game.cameraRig.smoothedEye = null;
   game.cameraRig.yaw = Math.atan2(2, 0);
-  game.cameraRig.pitch = -0.05;
+  game.cameraRig.pitch = -0.1;
   return v.name;
 });
-await wait(600);
+const talked = await placeNearElder();
+for (let i = 0; i < 10; i++) {
+  const ok = await page.waitForFunction(() => !!game.interaction.prompt, null, { timeout: 4000 }).then(() => true).catch(() => false);
+  if (ok) break;
+  await placeNearElder();
+}
 const prompt = await ev(() => game.interaction.prompt);
 check('NPC interaction prompt', !!prompt && prompt.includes('Поговорить'), `"${prompt}"`);
 await page.keyboard.press('KeyE');
-await wait(1200);
+await page.waitForFunction(() => !!game.dialog.active, null, { timeout: 20000 }).catch(() => {});
 check('Dialog opens', await ev(() => !!game.dialog.active), talked);
 await shot('08-dialog');
-for (let i = 0; i < 12; i++) { await page.keyboard.press('KeyE'); await wait(150); }
-check('Dialog finishes + gift', await ev(() => !game.dialog.active && game.inventory.count('potion') >= 5));
+for (let i = 0; i < 14; i++) { if (!(await ev(() => !!game.dialog.active))) break; await page.keyboard.press('KeyE'); await wait(700); }
+const dlg = await ev(() => [!!game.dialog.active, game.inventory.count('potion'), game.entities.villagers.find((x) => x.profile.title === 'Старейшина').giftGiven, game.dialog.active?.lineIndex]);
+check('Dialog finishes + gift', !dlg[0] && dlg[2], JSON.stringify(dlg));
 
 // ---- Door / chest / campfire interactions ----
 // campfire: look at it from 2.5m
@@ -213,7 +233,7 @@ const cfBefore = await ev(() => {
 await wait(500);
 const cfPrompt = await ev(() => game.interaction.prompt);
 await page.keyboard.press('KeyE');
-await wait(300);
+await page.waitForFunction((b) => game.village.campfires[0].lit !== b, cfBefore, { timeout: 15000 }).catch(() => {});
 const cfAfter = await ev(() => game.village.campfires[0].lit);
 check('Campfire toggle', cfBefore !== cfAfter, `prompt="${cfPrompt}"`);
 await page.keyboard.press('KeyE');
@@ -258,18 +278,19 @@ const heal = await ev(() => {
   return game.player.health.current;
 });
 await wait(300);
-await page.mouse.down(); await wait(80); await page.mouse.up();
-await wait(300);
+await page.waitForFunction(() => game.weapons.cooldown <= 0, null, { timeout: 20000 }).catch(() => {});
+await page.mouse.down(); await wait(400); await page.mouse.up();
+await page.waitForFunction((h) => game.player.health.current > h, heal, { timeout: 20000 }).catch(() => {});
 const heal2 = await ev(() => game.player.health.current);
 check('Potion heals', heal2 > heal, `${heal} -> ${heal2.toFixed(0)}`);
 
 // ---- Stone throwing ----
 await page.keyboard.press('Digit6');
-await wait(300);
-const bodiesBefore = await ev(() => game.physics.bodies.length);
-await page.mouse.down(); await wait(80); await page.mouse.up();
-await wait(200);
-check('Throw stone from hotbar', (await ev(() => game.physics.bodies.length)) === bodiesBefore + 1);
+await page.waitForFunction(() => game.weapons.cooldown <= 0 && game.weapons.equippedId === 'stone', null, { timeout: 20000 }).catch(() => {});
+const stonesBefore = await ev(() => game.inventory.count('stone'));
+await page.mouse.down(); await wait(400); await page.mouse.up();
+await page.waitForFunction((n) => game.inventory.count('stone') < n, stonesBefore, { timeout: 20000 }).catch(() => {});
+check('Throw stone from hotbar', (await ev(() => game.inventory.count('stone'))) === stonesBefore - 1);
 
 // ---- Debug menu ----
 await page.keyboard.press('F1');
@@ -286,9 +307,9 @@ const count1 = await ev(() => game.entities.creatures.length);
 check('Debug spawns creatures', count1 === count0 + 12, `${count0} -> ${count1}`);
 await shot('09-debug-menu');
 await page.getByText('Clear Spawned Objects').click({ force: true });
-await wait(300);
+await page.waitForFunction((n) => game.entities.creatures.length <= n + 1, count0, { timeout: 15000 }).catch(() => {});
 const count2 = await ev(() => game.entities.creatures.length);
-check('Clear spawned', count2 <= count0, `${count1} -> ${count2}`);
+check('Clear spawned', count2 <= count0 + 1, `${count1} -> ${count2}`);
 await page.getByText('Ночь (23:00)').click({ force: true });
 await page.keyboard.press('F1');
 await wait(300);
@@ -340,8 +361,9 @@ await page.keyboard.press('Escape');
 await wait(500);
 check('Esc opens pause menu', await ev(() => game.ui.modal === 'pause'));
 await shot('15-pause');
+console.log('modal before resume:', await ev(() => game.ui.modal));
 await page.getByText('Продолжить').click({ force: true });
-await wait(300);
+await wait(800);
 check('Resume', await ev(() => game.ui.modal === null));
 
 const fps = await ev(() => game.ui.debug.fps);

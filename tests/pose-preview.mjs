@@ -5,6 +5,8 @@ const page = await browser.newPage({ viewport: { width: 640, height: 360 } });
 page.on('pageerror', (e) => console.log('ERR', e.message));
 await page.goto('http://localhost:4173/?autostart&quality=low');
 await page.waitForFunction(() => window.game && window.game.state === 'playing', null, { timeout: 180000 });
+// Tests drive the camera directly: disable real pointer lock so synthetic mouse moves don't rotate it
+await page.evaluate(() => { game.input.requestLock = () => {}; if (document.pointerLockElement) { game.ui.intentionalUnlock = true; document.exitPointerLock(); } });
 const weapons = (process.argv[2] || 'sword,greatsword,staff').split(',');
 for (const w of weapons) {
   const slot = { sword: 0, greatsword: 1, staff: 2, fists: 7 }[w];
