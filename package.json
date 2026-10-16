@@ -10,9 +10,9 @@
     "preview": "vite preview --host",
     "start": "vite --host --open",
     "desktop": "vite build && electron .",
-    "dist:win": "vite build && electron-builder --win --x64",
-    "dist:linux": "vite build && electron-builder --linux",
-    "dist:mac": "vite build && electron-builder --mac"
+    "dist:win": "vite build && electron-builder --win --x64 --publish never",
+    "dist:linux": "vite build && electron-builder --linux --publish never",
+    "dist:mac": "vite build && electron-builder --mac --publish never"
   },
   "dependencies": {},
   "devDependencies": {
