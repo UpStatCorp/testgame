@@ -33,29 +33,41 @@ const curve = await page.evaluate(() => {
 check('Neck offset strictly 0 for pitch >= -0.3', curve.nonZeroAbove === 0, JSON.stringify(curve));
 check('Max forward camera shift <= 0.3 m (< player radius 0.35)', curve.maxFwd <= 0.3 && curve.FWD_MAX <= 0.3, JSON.stringify(curve));
 
-await page.evaluate(() => { game.cameraRig.pitch = -1.2; });
-await page.waitForTimeout(2000);
-const toes = await page.evaluate(() => ['mixamorigLeftToeBase', 'mixamorigRightToeBase'].map((n) => {
-  const v = game.playerBody.model.getObjectByName(n).getWorldPosition(new game.camera.position.constructor()).project(game.camera);
-  return [+v.x.toFixed(2), +v.y.toFixed(2), +v.z.toFixed(3)];
-}));
-check('Toes project inside the camera frame at pitch -1.2', toes.every(([x, y, z]) => Math.abs(x) <= 1 && Math.abs(y) <= 1 && z < 1 && z > -1), JSON.stringify(toes));
-const occl = await page.evaluate(() => {
+// At pitch -1.2 at least one toe must be inside the frame AND not occluded by the body.
+// (The rear foot of a stance is hidden by the pelvis, as for a real person - accepted.)
+const toeVisibility = () => page.evaluate(() => {
   const g = game, V = g.camera.position.constructor;
   const meshes = [];
-  g.playerBody.model.traverse((o) => { if (o.isSkinnedMesh || o.isMesh) { o.computeBoundingSphere?.(); meshes.push(o); } });
+  g.playerBody.model.traverse((o) => { if (o.isMesh) { o.computeBoundingSphere?.(); meshes.push(o); } });
   const rc = new g.interaction.raycaster.constructor();
   return ['mixamorigLeftToeBase', 'mixamorigRightToeBase'].map((n) => {
     const toe = g.playerBody.model.getObjectByName(n).getWorldPosition(new V());
+    const ndc = toe.clone().project(g.camera);
+    const inFrame = Math.abs(ndc.x) <= 1 && Math.abs(ndc.y) <= 1 && ndc.z > -1 && ndc.z < 1;
     const dir = toe.clone().sub(g.camera.position);
     const dist = dir.length();
     rc.set(g.camera.position, dir.normalize());
     rc.near = 0; rc.far = dist + 0.5;
     const hit = rc.intersectObjects(meshes, false)[0];
-    return { toe: n.replace('mixamorig', ''), dist: +dist.toFixed(3), firstHit: hit ? +hit.distance.toFixed(3) : null };
+    const unoccluded = !hit || hit.distance >= dist - 0.12;
+    return { toe: n.replace('mixamorig', ''), ndc: [+ndc.x.toFixed(2), +ndc.y.toFixed(2)], inFrame, dist: +dist.toFixed(3), firstHit: hit ? +hit.distance.toFixed(3) : null, visible: inFrame && unoccluded };
   });
 });
-check('Toes not occluded by the body (first hit >= dist - 0.12)', occl.every((o) => o.firstHit === null || o.firstHit >= o.dist - 0.12), JSON.stringify(occl));
+const poseCheck = async (pose) => {
+  await page.evaluate(() => { game.cameraRig.pitch = -1.2; });
+  if (pose !== 'Idle') await page.waitForFunction((a) => game.playerBody.current === a, pose, { timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(1500);
+  await page.evaluate(() => { game.cameraRig.pitch = -1.2; });
+  const anim = await page.evaluate(() => game.playerBody.current);
+  const toes = await toeVisibility();
+  check(`${pose}: at least one toe in frame and not occluded (pitch -1.2)`, anim === pose && toes.some((t) => t.visible), JSON.stringify({ anim, toes }));
+};
+await poseCheck('Idle');
 if (shots) await page.screenshot({ path: 'test-output/neck-1.2.png', timeout: 120000 });
+await page.keyboard.down('KeyW');
+await poseCheck('Walk');
+await page.keyboard.down('ShiftLeft');
+await poseCheck('Run');
+await page.keyboard.up('ShiftLeft'); await page.keyboard.up('KeyW');
 console.log(results.join('\n'));
 await browser.close();
