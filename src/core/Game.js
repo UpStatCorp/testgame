@@ -239,7 +239,6 @@ export class Game {
     this.player.update(dt);
     this.controller.update(dt);
     this.cameraRig.update(dt, this.player);
-    this.playerBody.update(dt);
     this.dialog.update(dt);
     this.weapons.update(dt);
     this.telekinesis.update(dt, this.time);
@@ -247,6 +246,10 @@ export class Game {
     this.combat.update(dt);
     this.entities.update(dt);
     this.pickups.update(dt, this.time);
+    // Systems above may have moved the player (creature separation etc.): re-place the camera
+    // from the final position so it never lags, then pose the body to match.
+    this.cameraRig.place(this.player);
+    this.playerBody.update(dt);
     if (!modal && this.player.health.alive) this.interaction.update();
     else this.interaction.current = null;
     this.audio.updateAmbient(dt, this.dayNight.daylight, this.camera.position);

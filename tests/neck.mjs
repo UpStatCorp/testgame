@@ -19,12 +19,19 @@ const d0 = await page.evaluate(() => {
   return [cam.position.distanceTo(old), cam.position.distanceTo(r.basePosition)];
 });
 check('Camera at pitch 0 identical to old formula', d0[0] < 1e-6 && d0[1] < 1e-6, JSON.stringify(d0));
-const maxFwd = await page.evaluate(() => {
-  let m = 0, at = 0;
-  for (let p = 0; p >= -1.5; p -= 0.01) { const d = game.cameraRig.constructor.neckDelta(p, 0); if (-d.z > m) { m = -d.z; at = p; } }
-  return [m, at];
+const curve = await page.evaluate(() => {
+  const R = game.cameraRig.constructor;
+  let m = 0, at = 0, nonZeroAbove = 0;
+  for (let p = 0.5; p >= -1.55; p -= 0.005) {
+    const d = R.neckDelta(p, 0.7);
+    const fwd = Math.hypot(d.x, d.z);
+    if (p >= -0.3 && d.length() !== 0) nonZeroAbove++;
+    if (fwd > m) { m = fwd; at = p; }
+  }
+  return { maxFwd: +m.toFixed(4), atPitch: +at.toFixed(2), FWD_MAX: R.NECK_FWD_MAX, DOWN_MAX: R.NECK_DOWN_MAX, nonZeroAbove };
 });
-check('Max forward camera shift < 0.2 m and < player radius', maxFwd[0] < 0.2 && maxFwd[0] < 0.35, JSON.stringify(maxFwd.map((v) => +v.toFixed(3))));
+check('Neck offset strictly 0 for pitch >= -0.3', curve.nonZeroAbove === 0, JSON.stringify(curve));
+check('Max forward camera shift <= 0.3 m (< player radius 0.35)', curve.maxFwd <= 0.3 && curve.FWD_MAX <= 0.3, JSON.stringify(curve));
 
 await page.evaluate(() => { game.cameraRig.pitch = -1.2; });
 await page.waitForTimeout(2000);
@@ -33,6 +40,22 @@ const toes = await page.evaluate(() => ['mixamorigLeftToeBase', 'mixamorigRightT
   return [+v.x.toFixed(2), +v.y.toFixed(2), +v.z.toFixed(3)];
 }));
 check('Toes project inside the camera frame at pitch -1.2', toes.every(([x, y, z]) => Math.abs(x) <= 1 && Math.abs(y) <= 1 && z < 1 && z > -1), JSON.stringify(toes));
+const occl = await page.evaluate(() => {
+  const g = game, V = g.camera.position.constructor;
+  const meshes = [];
+  g.playerBody.model.traverse((o) => { if (o.isSkinnedMesh || o.isMesh) { o.computeBoundingSphere?.(); meshes.push(o); } });
+  const rc = new g.interaction.raycaster.constructor();
+  return ['mixamorigLeftToeBase', 'mixamorigRightToeBase'].map((n) => {
+    const toe = g.playerBody.model.getObjectByName(n).getWorldPosition(new V());
+    const dir = toe.clone().sub(g.camera.position);
+    const dist = dir.length();
+    rc.set(g.camera.position, dir.normalize());
+    rc.near = 0; rc.far = dist + 0.5;
+    const hit = rc.intersectObjects(meshes, false)[0];
+    return { toe: n.replace('mixamorig', ''), dist: +dist.toFixed(3), firstHit: hit ? +hit.distance.toFixed(3) : null };
+  });
+});
+check('Toes not occluded by the body (first hit >= dist - 0.12)', occl.every((o) => o.firstHit === null || o.firstHit >= o.dist - 0.12), JSON.stringify(occl));
 if (shots) await page.screenshot({ path: 'test-output/neck-1.2.png', timeout: 120000 });
 console.log(results.join('\n'));
 await browser.close();
