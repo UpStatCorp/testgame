@@ -5,9 +5,11 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 const MODEL_URL = `${import.meta.env.BASE_URL}models/Soldier.glb`;
 const HIDDEN_BONES = ['mixamorig:Head', 'mixamorig:LeftShoulder', 'mixamorig:RightShoulder', 'mixamorig:LeftArm', 'mixamorig:RightArm'];
 const HIDDEN_BONE_KEYS = new Set(HIDDEN_BONES.map((n) => n.replace(':', '')));
+const LEAN_BONES = new Set(['mixamorigSpine1', 'mixamorigSpine2']);
+const MAX_LEAN = THREE.MathUtils.degToRad(25); // total across both spine bones
 const WALK_THRESHOLD = 0.4; // m/s
 const RUN_THRESHOLD = 5.4; // m/s (walk is 4.6, sprint 7.8)
-const BACK_OFFSET = 0.2; // body shifted back along the look direction so the chest stays out of frame
+const BACK_OFFSET = 0.05; // body stands under the camera; the neck pivot in CameraRig moves the eyes forward when looking down
 
 /**
  * Visual-only player body: follows the player's feet and camera yaw, blends Idle/Walk/Run by
@@ -24,6 +26,8 @@ export class PlayerBody {
     this.actions = {};
     this.current = null;
     this.hiddenBones = [];
+    this.leanBones = [];
+    this.leanSign = -1; // Mixamo spine: negative local X bends the chest away from the camera
     this._fwd = new THREE.Vector3();
     game.scene.add(this.root);
   }
@@ -56,6 +60,7 @@ export class PlayerBody {
       }
       // GLTFLoader sanitizes node names ('mixamorig:Head' -> 'mixamorigHead'), so compare without ':'
       if (o.isBone && HIDDEN_BONE_KEYS.has(o.name.replace(':', ''))) this.hiddenBones.push(o);
+      if (o.isBone && LEAN_BONES.has(o.name.replace(':', ''))) this.leanBones.push(o);
     });
     // Scale so the model is as tall as the player capsule
     model.updateMatrixWorld(true);
@@ -94,6 +99,10 @@ export class PlayerBody {
     if (this.current === 'Run') this.actions.Run.timeScale = THREE.MathUtils.clamp(speed / 6.5, 0.8, 1.4);
     this.mixer.update(dt);
     for (const b of this.hiddenBones) b.scale.setScalar(0); // after the mixer, in case clips key scale
+    // Lean the upper spine forward as the player looks down, so the chest drops out of view
+    const down = THREE.MathUtils.clamp(-this.game.cameraRig.pitch / 1.5, 0, 1);
+    const perBone = (MAX_LEAN * down) / Math.max(1, this.leanBones.length);
+    for (const b of this.leanBones) b.rotateX(perBone * this.leanSign);
 
     const yaw = this.game.cameraRig.yaw;
     this._fwd.set(-Math.sin(yaw), 0, -Math.cos(yaw));

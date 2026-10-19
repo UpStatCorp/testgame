@@ -25,6 +25,21 @@ export class CameraRig {
     this.bobOffset = new THREE.Vector3();
     this.forward = new THREE.Vector3();
     this.euler = new THREE.Euler(0, 0, 0, 'YXZ');
+    this.basePosition = new THREE.Vector3();
+    this._neck = new THREE.Vector3();
+  }
+
+  /**
+   * Eye offset relative to the neck pivot (head space): NECK_UP above, NECK_FORWARD ahead.
+   * Returns R(pitch)·o - o in world space, i.e. exactly (0,0,0) at pitch 0.
+   * Max forward shift: ~0.09 m (pitch ≈ -1.08), well under the player radius (0.35 m).
+   */
+  static neckDelta(pitch, yaw, out = new THREE.Vector3()) {
+    const u = CameraRig.NECK_UP, f = CameraRig.NECK_FORWARD;
+    const c = Math.cos(pitch), s = Math.sin(pitch);
+    const forward = f * (c - 1) - u * s; // along the horizontal look direction
+    const up = u * (c - 1) + f * s;
+    return out.set(-Math.sin(yaw) * forward, up, -Math.cos(yaw) * forward);
   }
 
   addLook(dx, dy) {
@@ -85,6 +100,9 @@ export class CameraRig {
     const rightV = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
     cam.position.set(player.position.x, this.smoothedEye + this.bobOffset.y + this.landDip, player.position.z);
     cam.position.addScaledVector(rightV, this.bobOffset.x);
+    this.basePosition.copy(cam.position); // pre-neck position (exactly the old formula)
+    // Head pivots around the neck: eyes move forward/down when looking down. Zero at pitch 0.
+    cam.position.add(CameraRig.neckDelta(this.pitch, this.yaw, this._neck));
 
     // FOV kick when sprinting
     const targetFov = this.baseFov + (sprint && hs > 5 ? 7 : 0);
@@ -96,3 +114,6 @@ export class CameraRig {
     cam.getWorldDirection(this.forward);
   }
 }
+
+CameraRig.NECK_UP = 0.15;
+CameraRig.NECK_FORWARD = 0.08;
