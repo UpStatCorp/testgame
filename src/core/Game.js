@@ -18,6 +18,7 @@ import { Inventory } from '../inventory/Inventory.js';
 import { Player } from '../player/Player.js';
 import { CameraRig } from '../player/CameraRig.js';
 import { PlayerController } from '../player/PlayerController.js';
+import { PlayerBody } from '../player/PlayerBody.js';
 import { Telekinesis } from '../telekinesis/Telekinesis.js';
 import { WeaponSystem } from '../weapons/WeaponSystem.js';
 import { CombatSystem } from '../combat/CombatSystem.js';
@@ -72,6 +73,7 @@ export class Game {
       this.cameraRig = new CameraRig(this.camera);
       this.player = new Player(this);
       this.controller = new PlayerController(this, this.player);
+      this.playerBody = new PlayerBody(this);
       this.telekinesis = new Telekinesis(this);
       this.weapons = new WeaponSystem(this);
       this.combat = new CombatSystem(this);
@@ -93,6 +95,8 @@ export class Game {
         this.audio.play('splash', { position: b.position });
       };
     });
+    onProgress(0.95, 'Одеваем героя…');
+    await this.playerBody.load();
     await step(1, 'Готово', () => {
       // warm-up render to compile shaders before the player sees the world
       this.cameraRig.update(0.016, this.player);
@@ -235,6 +239,7 @@ export class Game {
     this.player.update(dt);
     this.controller.update(dt);
     this.cameraRig.update(dt, this.player);
+    this.playerBody.update(dt);
     this.dialog.update(dt);
     this.weapons.update(dt);
     this.telekinesis.update(dt, this.time);
