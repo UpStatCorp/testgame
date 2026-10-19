@@ -24,6 +24,16 @@ await page.waitForFunction(() => window.game && window.game.state === 'playing',
 await page.evaluate(() => { game.input.requestLock = () => {}; if (document.pointerLockElement) { game.ui.intentionalUnlock = true; document.exitPointerLock(); } });
 await wait(1500);
 
+// ---- Player body (first-person full body) ----
+check('Player body loaded', await ev(() => game.playerBody.loaded && !game.playerBody.failed && game.playerBody.hiddenBones.length === 5), JSON.stringify(await ev(() => ({ loaded: game.playerBody.loaded, hidden: game.playerBody.hiddenBones.length }))));
+check('Player body idle when standing', await ev(() => game.playerBody.current === 'Idle'));
+await page.keyboard.down('ShiftLeft'); await page.keyboard.down('KeyW');
+const ran = await page.waitForFunction(() => game.playerBody.current === 'Run', null, { timeout: 30000 }).then(() => true).catch(() => false);
+const runInfo = await ev(() => ({ anim: game.playerBody.current, speed: Math.hypot(game.player.velocity.x, game.player.velocity.z).toFixed(2) }));
+await page.keyboard.up('KeyW'); await page.keyboard.up('ShiftLeft');
+check('Player body switches Idle -> Run above speed threshold', ran, JSON.stringify(runInfo));
+await page.waitForFunction(() => game.playerBody.current === 'Idle', null, { timeout: 30000 }).catch(() => {});
+
 // ---- Movement ----
 const p0 = await ev(() => game.player.position.toArray());
 await page.keyboard.down('KeyW');

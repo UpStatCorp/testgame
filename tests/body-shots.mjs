@@ -1,0 +1,27 @@
+// Screenshots of the first-person body: look down standing, look down running, look forward.
+import { chromium } from 'playwright';
+const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
+const errors = [];
+page.on('pageerror', (e) => errors.push(e.message));
+await page.goto('http://localhost:4173/?autostart&quality=low');
+await page.waitForFunction(() => window.game && window.game.state === 'playing', null, { timeout: 180000 });
+await page.evaluate(() => { game.input.requestLock = () => {}; if (document.pointerLockElement) { game.ui.intentionalUnlock = true; document.exitPointerLock(); } });
+const info = () => page.evaluate(() => ({ loaded: game.playerBody.loaded, anim: game.playerBody.current, speed: Math.hypot(game.player.velocity.x, game.player.velocity.z).toFixed(2), near: game.camera.near }));
+await page.evaluate(() => { game.cameraRig.pitch = -1.35; });
+await page.waitForTimeout(4000);
+console.log('down-idle', await info());
+await page.screenshot({ path: 'test-output/body-down-idle.png', timeout: 120000 });
+await page.keyboard.down('ShiftLeft'); await page.keyboard.down('KeyW');
+await page.waitForFunction(() => game.playerBody.current === 'Run', null, { timeout: 60000 }).catch(() => {});
+await page.waitForTimeout(1500);
+console.log('down-run', await info());
+await page.screenshot({ path: 'test-output/body-down-run.png', timeout: 120000 });
+await page.keyboard.up('KeyW'); await page.keyboard.up('ShiftLeft');
+await page.evaluate(() => { game.cameraRig.pitch = 0; });
+await page.waitForFunction(() => game.playerBody.current === 'Idle', null, { timeout: 60000 }).catch(() => {});
+await page.waitForTimeout(2000);
+console.log('forward', await info());
+await page.screenshot({ path: 'test-output/body-forward.png', timeout: 120000 });
+console.log('errors', errors.length ? errors : 'none');
+await browser.close();
