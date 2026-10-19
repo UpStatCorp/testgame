@@ -1,15 +1,11 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { TwoBoneIK } from './ArmIK.js';
+import { FPArm } from './FPArm.js';
 
 // Temporary full-body model for first-person view (three.js example "Soldier", Mixamo rig).
 const MODEL_URL = `${import.meta.env.BASE_URL}models/Soldier.glb`;
 const HIDDEN_BONES = ['mixamorig:Head', 'mixamorig:LeftShoulder', 'mixamorig:RightShoulder', 'mixamorig:LeftArm', 'mixamorig:RightArm'];
 const HIDDEN_BONE_KEYS = new Set(HIDDEN_BONES.map((n) => n.replace(':', '')));
-// Shown (and driven by IK) only while the one-handed sword is equipped
-const RIGHT_ARM_KEYS = new Set(['mixamorigRightShoulder', 'mixamorigRightArm']);
-// ?oldarms: keep the procedural ViewModel arms for every weapon (comparison / rollback)
-const OLD_ARMS = new URLSearchParams(location.search).has('oldarms');
 const WALK_THRESHOLD = 0.4; // m/s
 const RUN_THRESHOLD = 5.4; // m/s (walk is 4.6, sprint 7.8)
 const BACK_OFFSET = 0.05; // body stands under the camera; the neck pivot in CameraRig moves the eyes forward when looking down
@@ -30,12 +26,6 @@ export class PlayerBody {
     this.current = null;
     this.hiddenBones = [];
     this._fwd = new THREE.Vector3();
-    this._target = new THREE.Vector3();
-    this._targetQ = new THREE.Quaternion();
-    this._pole = new THREE.Vector3();
-    this.armIK = null;
-    this.armActive = false;
-    this.ikError = 0;
     game.scene.add(this.root);
   }
 
@@ -77,11 +67,9 @@ export class PlayerBody {
     model.position.y = -box.min.y * scale;
     this.root.add(model);
     this.model = model;
-
-    const bone = (n) => model.getObjectByName(`mixamorig${n}`);
-    if (bone('RightArm') && bone('RightForeArm') && bone('RightHand')) {
-      this.armIK = new TwoBoneIK(bone('RightArm'), bone('RightForeArm'), bone('RightHand'));
-    }
+    // First-person right arm for the sword (drawn by the ViewModel, attached to the camera)
+    this.fpArm = new FPArm(model, scale);
+    this.game.weapons.viewModel.setFPArm(this.fpArm);
 
     this.mixer = new THREE.AnimationMixer(model);
     for (const clip of gltf.animations) this.actions[clip.name] = this.mixer.clipAction(clip);
@@ -109,13 +97,7 @@ export class PlayerBody {
     if (this.current === 'Walk') this.actions.Walk.timeScale = THREE.MathUtils.clamp(speed / 2.6, 0.6, 1.8);
     if (this.current === 'Run') this.actions.Run.timeScale = THREE.MathUtils.clamp(speed / 6.5, 0.8, 1.4);
     this.mixer.update(dt);
-    const vm = this.game.weapons.viewModel;
-    this.armActive = !OLD_ARMS && !!this.armIK && vm.currentId === 'sword';
-    vm.rightArm.visible = vm.rightHand.visible = !this.armActive;
-    for (const b of this.hiddenBones) {
-      // after the mixer, in case clips key scale
-      b.scale.setScalar(this.armActive && RIGHT_ARM_KEYS.has(b.name) ? 1 : 0);
-    }
+    for (const b of this.hiddenBones) b.scale.setScalar(0); // after the mixer, in case clips key scale
 
     const yaw = this.game.cameraRig.yaw;
     this._fwd.set(-Math.sin(yaw), 0, -Math.cos(yaw));
@@ -124,18 +106,5 @@ export class PlayerBody {
     this.root.position.set(p.position.x, p.position.y - sink, p.position.z).addScaledVector(this._fwd, -BACK_OFFSET);
     this.root.rotation.y = yaw; // Soldier faces -Z like the camera (verified: toes point along the view)
     this.root.visible = p.health.alive;
-    if (this.armActive) this.solveRightArm(yaw);
-  }
-
-  /** Puts the right hand (wrist bone) on the sword grip point: the hidden ViewModel glove. */
-  solveRightArm(yaw) {
-    const hand = this.game.weapons.viewModel.rightHand;
-    this.root.updateMatrixWorld(true);
-    hand.updateWorldMatrix(true, false);
-    hand.getWorldPosition(this._target);
-    hand.getWorldQuaternion(this._targetQ);
-    // elbow out (body right) and down
-    this._pole.set(Math.cos(yaw), -1, -Math.sin(yaw));
-    this.ikError = this.armIK.solve(this._target, this._pole, this._targetQ);
   }
 }
