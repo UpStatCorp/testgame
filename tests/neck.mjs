@@ -55,7 +55,6 @@ const toeVisibility = () => page.evaluate(() => {
 });
 const poseCheck = async (pose) => {
   await page.evaluate(() => { game.cameraRig.pitch = -1.2; });
-  if (pose !== 'Idle') await page.waitForFunction((a) => game.playerBody.current === a, pose, { timeout: 30000 }).catch(() => {});
   await page.waitForTimeout(1500);
   await page.evaluate(() => { game.cameraRig.pitch = -1.2; });
   const anim = await page.evaluate(() => game.playerBody.current);
@@ -64,10 +63,60 @@ const poseCheck = async (pose) => {
 };
 await poseCheck('Idle');
 if (shots) await page.screenshot({ path: 'test-output/neck-1.2.png', timeout: 120000 });
-await page.keyboard.down('KeyW');
-await poseCheck('Walk');
-await page.keyboard.down('ShiftLeft');
-await poseCheck('Run');
-await page.keyboard.up('ShiftLeft'); await page.keyboard.up('KeyW');
+
+// Walk / Run: deterministic sweep over 10 explicit phases of the clip (no timing, no movement).
+// The game loop is frozen, other actions stopped, and the pose is set via action.time.
+const phaseSweep = (clipName) => page.evaluate((clipName) => {
+  const g = game, b = g.playerBody;
+  g.state = 'frozen';
+  g.cameraRig.pitch = -1.2;
+  g.cameraRig.place(g.player);
+  g.camera.updateMatrixWorld(true);
+  b.mixer.stopAllAction();
+  const action = b.actions[clipName];
+  action.reset().setEffectiveWeight(1).setEffectiveTimeScale(1).play();
+  const dur = action.getClip().duration;
+  const rows = [];
+  for (let k = 0; k < 10; k++) {
+    action.time = (dur * k) / 10;
+    b.mixer.update(0);
+    for (const bone of b.hiddenBones) bone.scale.setScalar(0);
+    b.model.updateMatrixWorld(true);
+    rows.push({ k, toes: window.__toeVisibilitySync() });
+  }
+  return rows;
+}, clipName);
+await page.evaluate(() => {
+  // synchronous copy of toeVisibility for use inside the frozen sweep
+  window.__toeVisibilitySync = () => {
+    const g = game, V = g.camera.position.constructor;
+    const meshes = [];
+    g.playerBody.model.traverse((o) => { if (o.isMesh) { o.computeBoundingSphere?.(); meshes.push(o); } });
+    const rc = new g.interaction.raycaster.constructor();
+    return ['mixamorigLeftToeBase', 'mixamorigRightToeBase'].map((n) => {
+      const toe = g.playerBody.model.getObjectByName(n).getWorldPosition(new V());
+      const ndc = toe.clone().project(g.camera);
+      const inFrame = Math.abs(ndc.x) <= 1 && Math.abs(ndc.y) <= 1 && ndc.z > -1 && ndc.z < 1;
+      const dir = toe.clone().sub(g.camera.position);
+      const dist = dir.length();
+      rc.set(g.camera.position, dir.normalize());
+      rc.near = 0; rc.far = dist + 0.5;
+      const hit = rc.intersectObjects(meshes, false)[0];
+      const unoccluded = !hit || hit.distance >= dist - 0.12;
+      return { toe: n.replace('mixamorig', '').replace('ToeBase', ''), inFrame, dist: +dist.toFixed(3), firstHit: hit ? +hit.distance.toFixed(3) : null, visible: inFrame && unoccluded };
+    });
+  };
+});
+const phaseTables = {};
+for (const clip of ['Walk', 'Run']) {
+  const rows = await phaseSweep(clip);
+  const good = rows.filter((r) => r.toes.some((t) => t.visible)).length;
+  const table = rows.map((r) => `  ${clip} phase ${r.k}: visible=[${r.toes.filter((t) => t.visible).map((t) => t.toe).join(',') || '-'}] ` + r.toes.map((t) => `${t.toe}{inFrame:${t.inFrame},dist:${t.dist},firstHit:${t.firstHit}}`).join(' ')).join('\n');
+  phaseTables[clip] = table;
+  check(`${clip}: toe visible in >= 5 of 10 phases (pitch -1.2)`, good >= 5, `${good}/10`);
+}
+// restore normal play
+await page.evaluate(() => { const b = game.playerBody; b.mixer.stopAllAction(); b.current = null; b.play('Idle', 0); game.state = 'playing'; });
 console.log(results.join('\n'));
+console.log(phaseTables.Walk + '\n' + phaseTables.Run);
 await browser.close();
