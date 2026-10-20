@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { ItemMaterials, createItemModel } from '../items/ItemModels.js';
 import { damp, smoothstep } from '../core/MathUtils.js';
 
+// ?oldarms: keep the procedural arms for every weapon (comparison / rollback)
+const OLD_ARMS = new URLSearchParams(location.search).has('oldarms');
+
 const TRAIL_VERT = /* glsl */ `
   varying vec2 vUv;
   void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
@@ -78,6 +81,18 @@ export class ViewModel {
     this.leftShoulder = new THREE.Vector3(-0.38, -0.75, 0.2);
     this._v = new THREE.Vector3();
     this._v2 = new THREE.Vector3();
+    this.fpArm = null;
+  }
+
+  /** Real (skinned) right arm used instead of the procedural one while the one-handed sword is out. */
+  setFPArm(fpArm) {
+    this.fpArm = fpArm;
+    fpArm.root.visible = false;
+    this.root.add(fpArm.root);
+  }
+
+  get usesFPArm() {
+    return !!this.fpArm && !OLD_ARMS && this.currentId === 'sword';
   }
 
   setModel(id) {
@@ -166,6 +181,15 @@ export class ViewModel {
     this.holder.updateMatrix();
     this.updateArm(this.rightArm, this.rightHand, this.rightShoulder);
     if (this.leftArm.visible) this.updateArm(this.leftArm, this.leftHand, this.leftShoulder);
+    const fp = this.usesFPArm;
+    this.rightArm.visible = this.rightHand.visible = !fp;
+    if (this.fpArm) {
+      this.fpArm.root.visible = fp;
+      if (fp) {
+        this.fpArm.aspect = this.camera.aspect;
+        this.fpArm.update(dt, this.rightHand, this.holder);
+      }
+    }
 
     // Trails
     for (let i = this.trails.length - 1; i >= 0; i--) {

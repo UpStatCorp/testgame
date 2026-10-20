@@ -209,6 +209,13 @@ const placeNearElder = () => ev(() => {
   game.cameraRig.smoothedEye = null;
   game.cameraRig.yaw = Math.atan2(2, 0);
   game.cameraRig.pitch = -0.1;
+  // keep pickups (e.g. loot of enemies killed in the fights above) out of the line of sight to the elder
+  const ax = p.x, az = p.z, bx = v.position.x - ax, bz = v.position.z - az, len2 = bx * bx + bz * bz;
+  for (const it of [...game.pickups.list]) {
+    const q = it.position || it.root.position;
+    const t = Math.max(0, Math.min(1, ((q.x - ax) * bx + (q.z - az) * bz) / len2));
+    if (Math.hypot(q.x - ax - bx * t, q.z - az - bz * t) < 1.2) game.pickups.remove(it);
+  }
   return v.name;
 });
 const talked = await placeNearElder();

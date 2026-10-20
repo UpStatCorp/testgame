@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { FPArm } from './FPArm.js';
 
 // Temporary full-body model for first-person view (three.js example "Soldier", Mixamo rig).
 const MODEL_URL = `${import.meta.env.BASE_URL}models/Soldier.glb`;
@@ -66,6 +67,9 @@ export class PlayerBody {
     model.position.y = -box.min.y * scale;
     this.root.add(model);
     this.model = model;
+    // First-person right arm for the sword (drawn by the ViewModel, attached to the camera)
+    this.fpArm = new FPArm(model, scale);
+    this.game.weapons.viewModel.setFPArm(this.fpArm);
 
     this.mixer = new THREE.AnimationMixer(model);
     for (const clip of gltf.animations) this.actions[clip.name] = this.mixer.clipAction(clip);
