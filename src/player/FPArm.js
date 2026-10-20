@@ -1,21 +1,22 @@
 import * as THREE from 'three';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
-import { aimBone } from './ArmIK.js';
 
 // First-person right arm: only the right-arm triangles of the body mesh, on its own skeleton copy,
 // attached to the camera (root space == camera space). The arm is built from the hand: the palm sits on
 // the grip with an orientation fixed to the weapon, the forearm comes out of the wrist within anatomical
-// limits, and the upper arm (stretching up to 2x) connects the elbow to a shoulder point that may slide,
-// but only outside the frame (below or right of it).
+// limits with the elbow slightly bent, and the upper arm (stretching up to 2x) connects the elbow to a
+// shoulder point that may slide, but only outside the frame (below or right of it). The swivel of the
+// elbow around the shoulder-wrist line is chosen every frame so the forearm roll stays within its range
+// and the wrist barely twists.
 const SHOULDER = new THREE.Vector3(0.3, -0.35, 0); // default shoulder joint, camera space
 const MAX_UPPER = 2.0;
 const MAX_FORE = 1.4;
-const SHOULDER_SMOOTH = 14; // damp rate of the sliding shoulder (the hand never depends on it)
-const MAX_FORE_TWIST = Math.PI / 2; // forearm roll relative to the upper arm (0 = rig bind pose)
 const DEG = Math.PI / 180;
-const HINGE_FADE = [3 * DEG, 45 * DEG]; // elbow bend over which the real bend direction takes over
-const HINGE_SMOOTH = 20; // damp rate of the upper-arm roll (rolling around its own axis moves no joint)
-const HINGE_STRAIGHT = new THREE.Vector3(0, 1, 0); // elbow hinge of a straight arm, camera space
+const ELBOW_BEND = 15 * DEG; // preferred elbow bend (10..20 deg where the wrist limits allow)
+const FORE_TWIST_LIMIT = 85 * DEG; // forearm roll from neutral (thumb up)
+const WRIST_TWIST_LIMIT = 10 * DEG;
+const ELBOW_PREF = new THREE.Vector3(0.45, -1, 0).normalize(); // elbow points down and a little out
+const SWIVEL_STEPS = 36;
 // Wrist limits (hand frame: x towards the index finger, y along the fingers, z towards the palm)
 const RADIAL = 20 * DEG; // towards the thumb
 const ULNAR = 30 * DEG; // towards the little finger
@@ -68,6 +69,16 @@ const _d = new THREE.Vector3();
 const _e = new THREE.Vector3();
 const _s = new THREE.Vector3();
 const _c = new THREE.Vector3();
+const _u = new THREE.Vector3();
+const _h = new THREE.Vector3();
+const _p = new THREE.Vector3();
+const _x2 = new THREE.Vector3();
+const _o2 = new THREE.Vector3();
+const _m2 = new THREE.Matrix4();
+const _qm = new THREE.Quaternion();
+const _sp = new THREE.Vector3();
+const _fa = new THREE.Vector3();
+const _ep = new THREE.Vector3();
 const AXIS_Y = new THREE.Vector3(0, 1, 0);
 const _m = new THREE.Matrix4();
 const _fibo = [];
@@ -177,32 +188,65 @@ export class FPArm {
     this.handX = find('RightHandIndex1').position.clone().sub(find('RightHandPinky1').position);
     this.handX.addScaledVector(this.handY, -this.handX.dot(this.handY)).normalize();
     this.handZ = this.handX.clone().cross(this.handY);
+    // Bind data in camera space (the scene is unrotated and in its bind pose here)
+    this.upperParentQ = this.upper.parent.getWorldQuaternion(new THREE.Quaternion());
+    const upperBindQ = this.upper.getWorldQuaternion(new THREE.Quaternion());
+    const foreBindQ = this.fore.getWorldQuaternion(new THREE.Quaternion());
+    const handBindQ = this.hand.getWorldQuaternion(new THREE.Quaternion());
+    this.foreBindLocal = this.fore.quaternion.clone();
+    this.handBindLocalInv = this.hand.quaternion.clone().invert();
     // Elbow hinge in the upper-arm bone frame: in the bind (T) pose the forearm flexes forward (-Z)
-    this.upper.getWorldQuaternion(_q);
     _v.copy(this.fore.getWorldPosition(_v2)).sub(this.shoulderOffset).normalize();
-    this.hinge = _v.cross(_v2.set(0, 0, -1)).normalize().applyQuaternion(_q.invert());
+    this.hingeLocal = _v.cross(_v2.set(0, 0, -1)).applyQuaternion(_q.copy(upperBindQ).invert());
+    this.hingeLocal.y = 0;
+    this.hingeLocal.normalize();
+    this.basisLocal = new THREE.Matrix4().makeBasis(this.hingeLocal, AXIS_Y, this.hingeLocal.clone().cross(AXIS_Y));
+    // Neutral forearm roll: the palm faces forward (thumb up) in the T-pose
+    const axis = AXIS_Y.clone().applyQuaternion(foreBindQ);
+    const palm = this.handZ.clone().applyQuaternion(handBindQ);
+    palm.addScaledVector(axis, -palm.dot(axis)).normalize();
+    const fwd = new THREE.Vector3(0, 0, -1);
+    fwd.addScaledVector(axis, -fwd.dot(axis)).normalize();
+    const turn = Math.atan2(_v.crossVectors(palm, fwd).dot(axis), palm.dot(fwd));
+    this.neutralTwist = wrapAngle(twistY(this.foreBindLocal) + turn);
 
     this.k1 = 1;
     this.k2 = 1;
     this.error = 0;
     this.aspect = 16 / 9;
-    this.shoulder = SHOULDER.clone(); // smoothed, camera space
+    this.shoulder = SHOULDER.clone(); // camera space
+    this.shoulderPref = SHOULDER.clone(); // preferred shoulder point for the solve
     this.wrist = new THREE.Vector3(); // camera space
     this.elbow = new THREE.Vector3();
     this.dir = new THREE.Vector3(); // forearm direction (elbow -> wrist), camera space
     this.wristAngles = { lateral: 0, flex: 0, bend: 0 };
-    this.foreTwist = 0;
-    this.twistNeed = 0;
     this.elbowBend = 0;
-    this.hingeDir = new THREE.Vector3(0, 1, 0); // smoothed elbow hinge, camera space
+    this.foreTwist = 0; // from neutral
+    this.wristTwist = 0;
+    this.swivel = null; // previous swivel angle (continuity)
     this._grip = new THREE.Vector3();
     this._gripQ = new THREE.Quaternion();
     this._handQ = new THREE.Quaternion();
     this._rootQ = new THREE.Quaternion();
-    this._target = new THREE.Vector3();
+    this._cand = this.makeCandidate();
+    this._best = this.makeCandidate();
   }
 
-  /** Best forearm direction: closest to `d` (shoulder->wrist) inside the wrist limits. */
+  makeCandidate() {
+    return {
+      phi: 0, cost: Infinity, ok: false, f: new THREE.Vector3(), E: new THREE.Vector3(), S: new THREE.Vector3(),
+      Qu: new THREE.Quaternion(), Qf: new THREE.Quaternion(), k1: 1, k2: 1, bend: 0, foreTwist: 0, wristTwist: 0, elbowIn: false,
+    };
+  }
+
+  copyCandidate(dst, src) {
+    for (const k of Object.keys(src)) {
+      if (src[k] && src[k].copy) dst[k].copy(src[k]);
+      else dst[k] = src[k];
+    }
+  }
+
+  /** Best forearm direction: closest to `d` inside the wrist limits. */
   chooseForearm(out, d, x, y, z) {
     const dy = d.dot(y);
     const a = Math.atan2(d.dot(x), dy), b = Math.atan2(d.dot(z), dy);
@@ -221,8 +265,7 @@ export class FPArm {
         if (s1 < s2) l = m1; else h = m2;
       }
       const t = (l + h) / 2;
-      const aa = fixA ? val : t, bb = fixA ? t : val;
-      const sc = score(aa, bb);
+      const sc = fixA ? score(val, t) : score(t, val);
       if (sc > best) { best = sc; out.copy(_c); }
     };
     edge(true, -R, -F, E);
@@ -251,9 +294,85 @@ export class FPArm {
     return bd < Infinity;
   }
 
-  /** Places the palm on `gripObject` (world position, orientation from `holder`). dt=Infinity: no smoothing. */
+  /** Camera-space point: [in frame, above or left of the frame]. */
+  framing(p) {
+    if (p.z > -0.05) return [false, false];
+    const nx = p.x / (-p.z * TAN_V * this.aspect), ny = p.y / (-p.z * TAN_V);
+    return [Math.abs(nx) <= 1 && Math.abs(ny) <= 1, ny > 1 || nx < -1];
+  }
+
+  /**
+   * Arm for one swivel angle `phi` of the elbow around the shoulder-wrist line (0 = elbow up, pi = down).
+   * Fills candidate `c` (camera space) and its cost.
+   */
+  evaluate(phi, c, x, y, z) {
+    const W = this.wrist, L2 = this.L2;
+    const d = _d.subVectors(W, this.shoulderPref).normalize();
+    _e.set(0, 1, 0).addScaledVector(d, -d.y).normalize(); // e1: up, perpendicular to d
+    const o = _v.copy(_e).multiplyScalar(Math.cos(phi)).addScaledVector(_s.crossVectors(d, _e), Math.sin(phi));
+    const dC = _x2.copy(d), oC = _o2.copy(o);
+    // forearm tilt that bends the elbow by ELBOW_BEND (shoulder at its default point)
+    const bendAt = (th) => {
+      c.f.copy(dC).multiplyScalar(Math.cos(th)).addScaledVector(oC, -Math.sin(th));
+      c.E.copy(W).addScaledVector(c.f, -L2);
+      _u.subVectors(c.E, this.shoulderPref).normalize();
+      return Math.acos(THREE.MathUtils.clamp(_u.dot(c.f), -1, 1));
+    };
+    let lo = 0, hi = 60 * DEG;
+    if (bendAt(hi) > ELBOW_BEND) for (let i = 0; i < 24; i++) { const m = (lo + hi) / 2; if (bendAt(m) < ELBOW_BEND) lo = m; else hi = m; }
+    bendAt((lo + hi) / 2);
+    // wrist limits, then elbow and shoulder
+    this.chooseForearm(_f, c.f, x, y, z);
+    c.f.copy(_f);
+    c.ok = false;
+    for (c.k2 = 1; c.k2 <= MAX_FORE + 1e-9; c.k2 += 0.02) {
+      c.E.copy(W).addScaledVector(c.f, -L2 * c.k2);
+      if ((c.ok = this.placeShoulder(c.S, this.shoulderPref, c.E))) break;
+    }
+    c.k2 = Math.min(c.k2, MAX_FORE);
+    _u.subVectors(c.E, c.S);
+    c.k1 = _u.length() / this.L1;
+    _u.normalize();
+    c.bend = Math.acos(THREE.MathUtils.clamp(_u.dot(c.f), -1, 1));
+    // upper arm: Y along the bone, elbow hinge perpendicular to the bend plane
+    _h.crossVectors(_u, c.f);
+    if (_h.lengthSq() < 1e-8) _h.crossVectors(oC, dC);
+    _h.addScaledVector(_u, -_h.dot(_u)).normalize();
+    _m.makeBasis(_h, _u, _s.crossVectors(_h, _u));
+    _m2.copy(this.basisLocal).transpose().premultiply(_m);
+    c.Qu.setFromRotationMatrix(_m2);
+    // forearm without extra roll, then the roll that leaves the wrist untwisted
+    _q.copy(c.Qu).multiply(this.foreBindLocal);
+    _s.copy(AXIS_Y).applyQuaternion(_q);
+    c.Qf.setFromUnitVectors(_s, c.f).multiply(_q);
+    _qm.copy(c.Qf).invert().multiply(this._handQ).multiply(this.handBindLocalInv); // wrist deviation (forearm frame)
+    let t = 0;
+    for (let i = 0; i < 5; i++) t += twistY(_q2.setFromAxisAngle(AXIS_Y, -t).multiply(_qm));
+    const base = twistY(_q.copy(c.Qu).invert().multiply(c.Qf));
+    const need = wrapAngle(base + t - this.neutralTwist);
+    c.foreTwist = THREE.MathUtils.clamp(need, -FORE_TWIST_LIMIT, FORE_TWIST_LIMIT);
+    const roll = t + (c.foreTwist - need);
+    c.wristTwist = twistY(_q2.setFromAxisAngle(AXIS_Y, -roll).multiply(_qm));
+    c.Qf.multiply(_q2.setFromAxisAngle(AXIS_Y, roll));
+    // cost (degrees)
+    const [inFrame, topLeft] = this.framing(c.E);
+    c.elbowIn = inFrame;
+    _p.copy(ELBOW_PREF).addScaledVector(dC, -ELBOW_PREF.dot(dC)).normalize();
+    const style = Math.acos(THREE.MathUtils.clamp(oC.dot(_p), -1, 1)) / DEG;
+    const wv = Math.max(0, Math.abs(c.wristTwist) - WRIST_TWIST_LIMIT + 0.5 * DEG) / DEG;
+    const bendErr = (c.bend - ELBOW_BEND) / DEG;
+    let cost = 1e4 * wv * wv + 4 * bendErr * bendErr + 0.02 * style * style + 0.02 * (c.foreTwist / DEG) ** 2;
+    if (!c.ok) cost += 1e7;
+    if (topLeft) cost += 1e6;
+    if (inFrame) cost += 2e3;
+    if (this.swivel !== null) cost += 0.5 * (wrapAngle(phi - this.swivel) / DEG) ** 2;
+    c.phi = phi;
+    c.cost = cost;
+    return cost;
+  }
+
+  /** Places the palm on `gripObject` (world position, orientation from `holder`). */
   update(dt, gripObject, holder) {
-    for (const [b, q] of this.bind) b.quaternion.copy(q);
     for (const f of this.fingers) f.bone.quaternion.copy(this.bind.get(f.bone)).multiply(f.q);
     this.root.updateWorldMatrix(true, false);
     _m.copy(this.root.matrixWorld).invert();
@@ -268,101 +387,63 @@ export class FPArm {
     _z.copy(this.handZ).applyQuaternion(this._handQ);
     this.wrist.copy(PALM).applyQuaternion(this._handQ).negate().add(this._grip);
 
-    // Forearm direction from the (current) shoulder, then elbow, then shoulder placement; repeat to settle
-    const target = this._target;
-    let shoulderOk = false;
-    target.copy(SHOULDER);
-    for (let it = 0; it < 3; it++) {
-      _d.subVectors(this.wrist, target).normalize();
-      this.chooseForearm(_f, _d, _x, _y, _z);
-      this.dir.copy(_f);
-      for (this.k2 = 1; this.k2 <= MAX_FORE + 1e-9; this.k2 += 0.02) {
-        this.elbow.copy(this.wrist).addScaledVector(this.dir, -this.L2 * this.k2);
-        if ((shoulderOk = this.placeShoulder(_s, SHOULDER, this.elbow))) break;
-      }
-      this.k2 = Math.min(this.k2, MAX_FORE);
-      target.copy(_s);
+    // Swivel: coarse scan, then golden-section refinement around the best sample
+    const best = this._best, c = this._cand;
+    best.cost = Infinity;
+    for (let i = 0; i < SWIVEL_STEPS; i++) {
+      if (this.evaluate((i / SWIVEL_STEPS) * 2 * Math.PI - Math.PI, c, _x, _y, _z) < best.cost) this.copyCandidate(best, c);
     }
-    // Smooth the shoulder, then put it back on the reachable shell around the elbow
-    if (Number.isFinite(dt)) this.shoulder.lerp(target, 1 - Math.exp(-SHOULDER_SMOOTH * dt));
-    else this.shoulder.copy(target);
-    _d.subVectors(this.shoulder, this.elbow);
-    const r = THREE.MathUtils.clamp(_d.length(), this.L1, MAX_UPPER * this.L1);
-    _s.copy(this.elbow).addScaledVector(_d.normalize(), r);
-    this.shoulder.copy(outOfFrameBelowRight(_s, this.aspect) ? _s : target);
-    this.shoulderOk = shoulderOk;
+    const step = (2 * Math.PI) / SWIVEL_STEPS;
+    let l = best.phi - step, h = best.phi + step;
+    for (let i = 0; i < 20; i++) {
+      const m1 = l + (h - l) * 0.381966, m2 = h - (h - l) * 0.381966;
+      if (this.evaluate(m1, c, _x, _y, _z) < this.evaluate(m2, c, _x, _y, _z)) h = m2; else l = m1;
+    }
+    if (this.evaluate((l + h) / 2, c, _x, _y, _z) < best.cost) this.copyCandidate(best, c);
+    // Wrist still twisted too much: turn the shoulder around the forearm axis (this turns the elbow hinge,
+    // hence the forearm roll), by the smallest angle that brings the wrist twist within its limit.
+    if (Math.abs(best.wristTwist) > WRIST_TWIST_LIMIT - 0.5 * DEG) {
+      const phi = best.phi;
+      _sp.copy(best.S).sub(best.E);
+      _fa.copy(best.f);
+      _ep.copy(best.E);
+      let found = false;
+      for (let k = 1; k <= 60 && !found; k++) {
+        for (const sign of [1, -1]) {
+          this.shoulderPref.copy(_sp).applyAxisAngle(_fa, sign * k * 3 * DEG).add(_ep);
+          if (!outOfFrameBelowRight(this.shoulderPref, this.aspect)) continue;
+          this.evaluate(phi, c, _x, _y, _z);
+          if (c.ok && Math.abs(c.wristTwist) <= WRIST_TWIST_LIMIT - 0.5 * DEG) { this.copyCandidate(best, c); found = true; break; }
+        }
+      }
+      this.shoulderPref.copy(SHOULDER);
+    }
+    this.swivel = best.phi;
 
-    // Pose the bones: stretch, place the shoulder joint, aim upper arm and forearm, orient the hand
-    this.k1 = this.shoulder.distanceTo(this.elbow) / this.L1;
+    // Pose the bones from the chosen candidate (camera-space orientations)
+    this.k1 = best.k1;
+    this.k2 = best.k2;
+    this.shoulder.copy(best.S);
+    this.elbow.copy(best.E);
+    this.dir.copy(best.f);
+    this.elbowBend = best.bend;
+    this.foreTwist = best.foreTwist;
+    this.wristTwist = best.wristTwist;
+    this.elbowIn = best.elbowIn;
     this.fore.position.y = this.upperLen0 * this.k1;
     this.hand.position.y = this.foreLen0 * this.k2;
     this.upperProxy.scale.set(1, this.k1, 1);
     this.foreProxy.scale.set(1, this.k2, 1);
     this.scene.position.copy(this.shoulder).sub(this.shoulderOffset);
+    this.upper.quaternion.copy(this.upperParentQ).invert().multiply(best.Qu);
+    this.fore.quaternion.copy(best.Qu).invert().multiply(best.Qf);
+    this.hand.quaternion.copy(best.Qf).invert().multiply(this._handQ);
     this.root.updateMatrixWorld(true);
-    const toWorld = (p, out) => out.copy(p).applyMatrix4(this.root.matrixWorld);
-    aimBone(this.upper, toWorld(this.shoulder, _v), this.fore.getWorldPosition(_v2), toWorld(this.elbow, _s));
-    this.rollUpperToHinge(dt);
-    this.fore.getWorldPosition(_v);
-    aimBone(this.fore, _v, this.hand.getWorldPosition(_v2), toWorld(this.wrist, _s));
-    this.fore.getWorldQuaternion(_q);
-    this.hand.quaternion.copy(_q.invert().multiply(this._gripQ));
-    this.distributeTwist();
-    this.hand.updateMatrixWorld(true);
 
-    this.error = this.hand.getWorldPosition(_v).distanceTo(toWorld(this.wrist, _v2));
+    this.error = this.hand.getWorldPosition(_v).distanceTo(_v2.copy(this.wrist).applyMatrix4(this.root.matrixWorld));
     const dy = this.dir.dot(_y);
     this.wristAngles.lateral = Math.atan2(this.dir.dot(_x), dy);
     this.wristAngles.flex = Math.atan2(this.dir.dot(_z), dy);
     this.wristAngles.bend = Math.acos(THREE.MathUtils.clamp(dy, -1, 1));
-  }
-
-  /**
-   * Rolls the upper arm around its axis so the elbow bends around its hinge (forearm flexes forward).
-   * A straight arm has no bend direction: its hinge points along HINGE_STRAIGHT (camera up, i.e. the elbow
-   * crease faces up/in), and the real bend direction fades in with the elbow angle, so the roll is continuous.
-   */
-  rollUpperToHinge(dt) {
-    _d.subVectors(this.elbow, this.shoulder).normalize(); // upper arm, camera space
-    _e.crossVectors(_d, this.dir); // hinge of the actual bend, camera space
-    const bend = Math.asin(Math.min(1, _e.length()));
-    this.elbowBend = _d.dot(this.dir) < 0 ? Math.PI - bend : bend;
-    const w = THREE.MathUtils.smoothstep(this.elbowBend, HINGE_FADE[0], HINGE_FADE[1]);
-    if (w > 0) _e.normalize();
-    _s.copy(HINGE_STRAIGHT).addScaledVector(_d, -HINGE_STRAIGHT.dot(_d)).normalize().multiplyScalar(1 - w);
-    _e.multiplyScalar(w).add(_s).normalize(); // wanted hinge
-    if (Number.isFinite(dt)) {
-      this.hingeDir.lerp(_e, 1 - Math.exp(-HINGE_SMOOTH * dt));
-      _e.copy(this.hingeDir).addScaledVector(_d, -this.hingeDir.dot(_d));
-      if (_e.lengthSq() < 1e-8) _e.copy(_s);
-      _e.normalize();
-    }
-    this.hingeDir.copy(_e);
-    this.upper.getWorldQuaternion(_q);
-    _q2.copy(this._rootQ).invert().multiply(_q); // upper arm orientation in camera space
-    _c.copy(this.hinge).applyQuaternion(_q2); // current hinge, camera space (perpendicular to _d)
-    const angle = Math.atan2(_s.crossVectors(_c, _e).dot(_d), _c.dot(_e));
-    _q2.setFromAxisAngle(_d.applyQuaternion(this._rootQ), angle).multiply(this.upper.getWorldQuaternion(_q)); // world roll
-    this.upper.parent.getWorldQuaternion(_q);
-    this.upper.quaternion.copy(_q.invert().multiply(_q2));
-    this.upper.updateMatrixWorld(true);
-  }
-
-  /**
-   * Roll around the forearm axis: the forearm takes the hand's twist (pronation/supination) as long as
-   * it stays within +-90 deg of the upper arm; the rest stays in the wrist.
-   */
-  distributeTwist() {
-    const hq = this.hand.quaternion;
-    const handTwist = twistY(hq);
-    const foreTwist = twistY(this.fore.quaternion);
-    this.twistNeed = wrapAngle(foreTwist + handTwist);
-    const total = THREE.MathUtils.clamp(this.twistNeed, -MAX_FORE_TWIST, MAX_FORE_TWIST);
-    const move = total - foreTwist;
-    _q.setFromAxisAngle(AXIS_Y, move);
-    this.fore.quaternion.multiply(_q);
-    hq.premultiply(_q.invert());
-    this.fore.updateMatrixWorld(true);
-    this.foreTwist = twistY(this.fore.quaternion);
   }
 }

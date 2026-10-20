@@ -22,9 +22,13 @@ await page.evaluate(async ([pitch, u, swing, fov]) => {
   g.playerBody.update(0);
   g.camera.updateMatrixWorld(true);
   vm.sway.set(0, 0);
-  const pose = u === '' ? WEAPONS.sword.rest : sample(WEAPONS.sword.swings[swing], +u);
-  vm.update(0, pose, rig, g.player);
-  vm.fpArm?.update(Infinity, vm.rightHand, vm.holder);
+  // the arm solver keeps the previous elbow swivel: walk the swing from its start like the game does
+  if (vm.fpArm) vm.fpArm.swivel = null;
+  const steps = u === '' ? [WEAPONS.sword.rest] : Array.from({ length: Math.round(+u * 100) + 1 }, (_, k) => sample(WEAPONS.sword.swings[swing], k / 100));
+  for (const pose of steps) {
+    vm.update(0, pose, rig, g.player);
+    vm.fpArm?.update(Infinity, vm.rightHand, vm.holder);
+  }
   document.getElementById('ui-root').style.display = 'none';
   for (const el of document.querySelectorAll('#hud, .hud, #hotbar')) el.style.display = 'none';
   if (fov) { // close-up from a separate camera; fov = "deg,ox,oy,oz" offset from the grip in game-camera space
