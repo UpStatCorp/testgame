@@ -185,7 +185,10 @@ export class ViewModel {
     this.rightArm.visible = this.rightHand.visible = !fp;
     if (this.fpArm) {
       this.fpArm.root.visible = fp;
-      if (fp) this.fpArm.update(dt, this.rightHand, this.holder);
+      if (fp) {
+        this.fpArm.aspect = this.camera.aspect;
+        this.fpArm.update(dt, this.rightHand, this.holder);
+      }
     }
 
     // Trails

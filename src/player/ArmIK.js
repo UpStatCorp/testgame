@@ -15,7 +15,7 @@ const _qp = new THREE.Quaternion();
 const _qw = new THREE.Quaternion();
 
 /** Rotates `bone` (in world space) so the direction from `pivot` to `from` turns into `pivot`->`to`. */
-function aimBone(bone, pivot, from, to) {
+export function aimBone(bone, pivot, from, to) {
   _from.subVectors(from, pivot).normalize();
   _to.subVectors(to, pivot).normalize();
   _q.setFromUnitVectors(_from, _to);
